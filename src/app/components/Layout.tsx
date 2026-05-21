@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 import { ImageWithFallback } from './ui/image-with-fallback';
+import { kallanMarkSrc } from './kallan-mark';
 import { Toaster } from './ui/sonner';
 
 interface LayoutProps {
@@ -33,7 +34,7 @@ export function Layout({ children, showLogo = true }: LayoutProps) {
       {showLogo && (
         <div className="absolute top-8 left-8 z-10 animate-[fadeIn_0.8s_ease-out]">
           <ImageWithFallback
-            src="/src/imports/kallan-mark.png"
+            src={kallanMarkSrc}
             alt="Kallan"
             className="w-16 h-16 drop-shadow-2xl"
           />

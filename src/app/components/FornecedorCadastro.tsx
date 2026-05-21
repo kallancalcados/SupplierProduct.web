@@ -211,7 +211,6 @@ export function FornecedorCadastro() {
 
       toast.success('Pré-cadastro enviado com sucesso!', {
         description: 'Seu cadastro foi encaminhado para análise fiscal. Você será contatado se necessário.',
-        duration: 2000,
       });
 
       setTimeout(() => {

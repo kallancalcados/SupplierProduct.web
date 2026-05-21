@@ -13,7 +13,19 @@ import {
   type ProdutoAnaliseFiscalPayload,
 } from '../lib/supplier-api';
 import { AnaliseComprasFields } from './AnaliseComprasFields';
+import {
+  AnaliseComprasReadonly,
+  AnaliseFiscalReadonly,
+  PreCadastroFornecedorExtrasReadonly,
+} from './ProdutoDetalheReadonlySecoes';
+import { comprasFormFromProdutoDetalhe, type ProdutoDetalheCompleto } from '../lib/map-produto-detalhe';
 import { normalizeIndicadorCfopForPersist } from '../lib/erp-produto-integracao';
+import {
+  getStatusProdutoColor,
+  isFilaCompras,
+  labelStatusProduto,
+  motivoDevolucaoFiscal,
+} from '../../constants/produto-status-fluxo';
 
 interface Cor {
   codCor: string;
@@ -43,39 +55,7 @@ interface Barra {
   grade: string;
 }
 
-interface Product {
-  id: number;
-  descProduto: string;
-  descProdutoNf: string;
-  referFabricante: string;
-  ncm: string;
-  statusFluxo: number;
-  dataCadastro: string;
-  fornecedor: string;
-  tipoProduto?: string;
-  fabricante?: string;
-  composicao?: string;
-  grade?: string;
-  linha?: string;
-  griffe?: string;
-  colecao?: string;
-  obsFornecedor?: string;
-  cores?: Cor[];
-  precos?: Preco[];
-  fotos?: Foto[];
-  barras?: Barra[];
-  /** Preenchidos pelo GET interno quando a API os devolver; senão o rascunho em sessionStorage cobre a análise fiscal. */
-  cest?: string;
-  tributOrigem?: string;
-  tributIcms?: string;
-  idExcecaoGrupo?: string;
-  classificacaoFiscalFinal?: string;
-  caracteristicaContabil?: string;
-  enviaLojaVarejo?: boolean;
-  enviaVarejoInternet?: boolean;
-  variaPrecoPorCor?: boolean;
-  obsFiscal?: string;
-}
+type Product = ProdutoDetalheCompleto;
 
 interface ProdutoDetalhesModalProps {
   product: Product;
@@ -88,44 +68,6 @@ interface ProdutoDetalhesModalProps {
   showActions?: boolean;
   departamento?: 'fiscal' | 'compras';
 }
-
-/** Alinhado ao enum StatusProdutoCadastro (backend). */
-const STATUS_FLUXO: { [key: number]: string } = {
-  1: 'Pré-Cadastro Fornecedor',
-  2: 'Aguardando Compras',
-  3: 'Em Análise Compras',
-  4: 'Aguardando Fiscal',
-  5: 'Em Análise Fiscal',
-  6: 'Aprovado para Integração',
-  7: 'Integrado ERP',
-  8: 'Reprovado Compras',
-  9: 'Reprovado Fiscal',
-};
-
-const getStatusColor = (status: number) => {
-  switch (status) {
-    case 1:
-      return 'bg-blue-500/20 text-blue-100 border-blue-400/30';
-    case 2:
-      return 'bg-yellow-500/20 text-yellow-100 border-yellow-400/30';
-    case 3:
-      return 'bg-orange-500/20 text-orange-100 border-orange-400/30';
-    case 4:
-      return 'bg-purple-500/20 text-purple-100 border-purple-400/30';
-    case 5:
-      return 'bg-indigo-500/20 text-indigo-100 border-indigo-400/30';
-    case 6:
-      return 'bg-green-500/20 text-green-100 border-green-400/30';
-    case 7:
-      return 'bg-emerald-500/20 text-emerald-100 border-emerald-400/30';
-    case 8:
-      return 'bg-red-500/20 text-red-100 border-red-400/30';
-    case 9:
-      return 'bg-red-500/20 text-red-100 border-red-400/30';
-    default:
-      return 'bg-gray-500/20 text-gray-100 border-gray-400/30';
-  }
-};
 
 /** Limites alinhados ao AppDbContext (PRODUTO_CADASTRO) — evita 500 por truncamento no SQL Server. */
 function buildComprasPayload(form: Record<string, string>): ProdutoAnaliseComprasPayload {
@@ -151,7 +93,7 @@ function buildComprasPayload(form: Record<string, string>): ProdutoAnaliseCompra
     indicadorCfop: t(normalizeIndicadorCfopForPersist(form.indicadorCfop) ?? form.indicadorCfop, 20),
     periodoPcp: t(form.periodoPcp, 20),
     redeLojas: t(form.redeLojas, 20),
-    codProdutoSolucao: null,
+    codProdutoSolucao: t(form.codProdutoSolucao, 50),
     codProdutoSegmento: t(form.codProdutoSegmento, 50),
     obsCompras: t(form.obsCompras, 1000),
     contaContabil:
@@ -203,6 +145,7 @@ type ComprasFormStateShape = {
   indicadorCfop: string;
   periodoPcp: string;
   redeLojas: string;
+  codProdutoSolucao: string;
   codProdutoSegmento: string;
   obsCompras: string;
   contaContabil: string;
@@ -229,6 +172,7 @@ const COMPRAS_FORM_KEYS: (keyof ComprasFormStateShape)[] = [
   'indicadorCfop',
   'periodoPcp',
   'redeLojas',
+  'codProdutoSolucao',
   'codProdutoSegmento',
   'obsCompras',
   'contaContabil',
@@ -384,6 +328,7 @@ export function ProdutoDetalhesModal({
     indicadorCfop: '',
     periodoPcp: '',
     redeLojas: '',
+    codProdutoSolucao: '',
     codProdutoSegmento: '',
     obsCompras: '',
     contaContabil: DEFAULT_PRODUTO_CONTAS_CONTABEIS_ANALISE_COMPRAS.contaContabil ?? '',
@@ -399,6 +344,10 @@ export function ProdutoDetalhesModal({
     if (!isOpen) return;
     const seed = fiscalFormSeedFromProduct(product);
     if (departamento === 'fiscal') {
+      if (product.statusFluxo === 7) {
+        setFormFiscal(seed);
+        return;
+      }
       const draft = readFiscalAnaliseDraft(product.id);
       if (draft) {
         const draftCompativel =
@@ -421,33 +370,13 @@ export function ProdutoDetalhesModal({
   useLayoutEffect(() => {
     if (!isOpen) return;
 
-    const baseCompras: ComprasFormStateShape = {
-      grupoProduto: '',
-      subgrupoProduto: '',
-      codCategoria: '',
-      codSubcategoria: '',
-      tipoProduto: (product.tipoProduto ?? '').trim(),
-      grade: (product.grade ?? '').trim(),
-      linha: (product.linha ?? '').trim(),
-      griffe: (product.griffe ?? '').trim(),
-      colecao: (product.colecao ?? '').trim(),
-      unidade: '',
-      tipoStatusProduto: '',
-      sexoTipo: '',
-      tipoItemSped: '',
-      indicadorCfop: '',
-      periodoPcp: '',
-      redeLojas: '',
-      codProdutoSegmento: '',
-      obsCompras: '',
-      contaContabil: DEFAULT_PRODUTO_CONTAS_CONTABEIS_ANALISE_COMPRAS.contaContabil ?? '',
-      contaContabilCompra: DEFAULT_PRODUTO_CONTAS_CONTABEIS_ANALISE_COMPRAS.contaContabilCompra ?? '',
-      contaContabilVenda: DEFAULT_PRODUTO_CONTAS_CONTABEIS_ANALISE_COMPRAS.contaContabilVenda ?? '',
-      contaContabilDevCompra: DEFAULT_PRODUTO_CONTAS_CONTABEIS_ANALISE_COMPRAS.contaContabilDevCompra ?? '',
-      contaContabilDevVenda: DEFAULT_PRODUTO_CONTAS_CONTABEIS_ANALISE_COMPRAS.contaContabilDevVenda ?? '',
-    };
+    const baseCompras = comprasFormFromProdutoDetalhe(product);
 
-    if (departamento === 'compras') {
+    const contextoFiscalComHistorico =
+      departamento === 'fiscal' && product.statusFluxo >= 4 && product.statusFluxo <= 7;
+    if (contextoFiscalComHistorico) {
+      setFormCompras(baseCompras);
+    } else if (departamento === 'compras') {
       const draft = readComprasDraftFromStorage(product.id);
       setFormCompras(mergeComprasFormWithDraft(baseCompras, draft));
     } else {
@@ -485,10 +414,16 @@ export function ProdutoDetalhesModal({
   // Fiscal: salvar análise (PUT) leva 4→5; aprovar (POST) só no status 5, com integração ERP automática na API.
   const canAprovar =
     (departamento === 'fiscal' && product.statusFluxo === 5) ||
-    (departamento === 'compras' && (product.statusFluxo === 2 || product.statusFluxo === 3));
+    (departamento === 'compras' && isFilaCompras(product.statusFluxo));
   const canIniciar =
     (departamento === 'fiscal' && (product.statusFluxo === 4 || product.statusFluxo === 5)) ||
-    (departamento === 'compras' && (product.statusFluxo === 2 || product.statusFluxo === 3));
+    (departamento === 'compras' && isFilaCompras(product.statusFluxo));
+  const visaoCompletaIntegrado = departamento === 'fiscal' && product.statusFluxo === 7;
+  /** Fiscal: exibe pré-cadastro fornecedor e análise compras antes da análise fiscal (status 4–7). */
+  const exibirContextoPreComprasFiscal =
+    departamento === 'fiscal' && product.statusFluxo >= 4 && product.statusFluxo <= 7;
+
+  const motivoFiscal = motivoDevolucaoFiscal(product.obsFiscal);
 
   if (!isOpen) return null;
 
@@ -500,10 +435,11 @@ export function ProdutoDetalhesModal({
         <div className="sticky top-0 z-10 bg-white/15 backdrop-blur-xl border-b-2 border-white/20 px-8 py-6 flex items-center justify-between">
           <div>
             <h2 className="text-3xl font-bold text-white mb-2" style={{ fontFamily: 'Playfair Display, serif' }}>
-              Detalhes do Produto
+              {visaoCompletaIntegrado ? 'Cadastro completo do produto' : 'Detalhes do Produto'}
             </h2>
             <p className="text-white/70 text-sm" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 300 }}>
               ID #{product.id} • {product.fornecedor}
+              {product.codigoProdutoErp ? ` • ERP ${product.codigoProdutoErp}` : ''}
             </p>
           </div>
           <button
@@ -516,12 +452,23 @@ export function ProdutoDetalhesModal({
 
         <div className="overflow-y-auto max-h-[calc(90vh-180px)] px-8 py-6">
           <div className="space-y-6">
+            {departamento === 'compras' && motivoFiscal && (
+              <div className="rounded-xl border border-amber-400/40 bg-amber-500/15 px-5 py-4">
+                <p className="text-amber-100 font-semibold text-sm mb-1" style={{ fontFamily: 'Outfit, sans-serif' }}>
+                  Devolvido pelo fiscal
+                </p>
+                <p className="text-white/90 text-sm whitespace-pre-wrap" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 300 }}>
+                  {motivoFiscal}
+                </p>
+              </div>
+            )}
+
             <div className="flex items-center justify-between">
               <span
-                className={`inline-flex px-4 py-2 rounded-full text-sm font-medium border ${getStatusColor(product.statusFluxo)}`}
+                className={`inline-flex px-4 py-2 rounded-full text-sm font-medium border ${getStatusProdutoColor(product.statusFluxo)}`}
                 style={{ fontFamily: 'Outfit, sans-serif' }}
               >
-                {STATUS_FLUXO[product.statusFluxo] || 'Desconhecido'}
+                {labelStatusProduto(product.statusFluxo)}
               </span>
               <p className="text-white/60 text-sm" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 300 }}>
                 Cadastrado em: {formatDate(product.dataCadastro)}
@@ -844,6 +791,15 @@ export function ProdutoDetalhesModal({
               </div>
             )}
 
+            {exibirContextoPreComprasFiscal && (
+              <>
+                <PreCadastroFornecedorExtrasReadonly product={product} />
+                <AnaliseComprasReadonly product={product} />
+              </>
+            )}
+
+            {visaoCompletaIntegrado && <AnaliseFiscalReadonly product={product} />}
+
             {departamento === 'fiscal' && canIniciar && (
               <div className="bg-white/5 backdrop-blur-sm rounded-2xl p-6 border border-white/10">
                 <div className="flex items-center gap-3 mb-6">
@@ -1019,7 +975,6 @@ export function ProdutoDetalhesModal({
                         toast.success('Análise de compras salva.', {
                           description:
                             'Status exibido como “Em análise compras” na fila. Quando estiver pronto, clique em Aprovar para enviar ao fiscal (status 4 no sistema).',
-                          duration: 4500,
                         });
                         onMutationSuccess?.();
                       } catch (error) {
@@ -1039,7 +994,6 @@ export function ProdutoDetalhesModal({
                         toast.success('Análise fiscal salva.', {
                           description:
                             'Produto passa a status 5 (em análise fiscal) na API. Revise os obrigatórios e use Aprovar: o sistema integra automaticamente ao ERP (status 7) quando a integração for bem-sucedida.',
-                          duration: 5000,
                         });
                         onMutationSuccess?.();
                       } catch (error) {

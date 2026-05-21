@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router';
 import { Layout } from './Layout';
+import { LoadingBlock } from './ui/loading-state';
 import { ArrowLeft, Package, FileText, Palette, DollarSign, Camera, Barcode, Plus, Trash2, Scale } from 'lucide-react';
 import { toast } from 'sonner';
 import { getAuthSession } from '../lib/auth-storage';
@@ -20,6 +21,7 @@ import {
 import { loadProdutoPreCadastroSnapshot, saveProdutoPreCadastroSnapshot } from '../lib/produto-precadastro-snapshot';
 import { resolveCodigoDescricaoComboSalvo, resolveFabricanteCodigoErpSalvo } from '../lib/erp-produto-integracao';
 import { Combobox, type ComboboxOption } from './ui/combobox';
+import { motivoDevolucaoCompras } from '../../constants/produto-status-fluxo';
 
 interface Cor {
   codCor: string;
@@ -200,6 +202,63 @@ function pesoNumberToFormField(peso: number | null | undefined): string {
   return String(n).replace('.', ',');
 }
 
+function mapCoresToForm(
+  produto: ProdutoCadastroDetalhe,
+  snap: ProdutoPreCadastroPayload | null,
+): ProdutoFormData['cores'] {
+  const api = produto.cores ?? [];
+  const source = api.length > 0 ? api : snap?.cores ?? [];
+  return source.map((c) => ({
+    codCor: c.codCor ?? '',
+    descCor: c.descCor ?? '',
+    origemCor: c.origemCor ?? '',
+    corFabricante: c.corFabricante ?? '',
+    ncm: c.ncm ?? '',
+  }));
+}
+
+function mapPrecosToForm(
+  produto: ProdutoCadastroDetalhe,
+  snap: ProdutoPreCadastroPayload | null,
+): ProdutoFormData['precos'] {
+  const api = produto.precos ?? [];
+  const source = api.length > 0 ? api : snap?.precos ?? [];
+  return source.map((p) => ({
+    codigoTabelaPreco: p.codigoTabelaPreco ?? '',
+    preco: Number(p.preco ?? 0),
+  }));
+}
+
+function mapFotosToForm(
+  produto: ProdutoCadastroDetalhe,
+  snap: ProdutoPreCadastroPayload | null,
+): ProdutoFormData['fotos'] {
+  const api = produto.fotos ?? [];
+  const source = api.length > 0 ? api : snap?.fotos ?? [];
+  return source.map((f) => ({
+    corLinx: f.corLinx ?? '',
+    nomeArquivo: f.nomeArquivo ?? '',
+    caminhoArquivo: f.caminhoArquivo ?? '',
+    base64Foto: f.base64Foto ?? '',
+    ordemFoto: f.ordemFoto == null ? null : Number(f.ordemFoto),
+  }));
+}
+
+function mapBarrasToForm(
+  produto: ProdutoCadastroDetalhe,
+  snap: ProdutoPreCadastroPayload | null,
+): ProdutoFormData['barras'] {
+  const api = produto.barras ?? [];
+  const source = api.length > 0 ? api : snap?.barras ?? [];
+  return source.map((b) => ({
+    codigoBarra: b.codigoBarra ?? '',
+    corProduto: b.corProduto ?? '',
+    tamanho: b.tamanho ?? '',
+    grade: b.grade ?? '',
+  }));
+}
+
+/** GET /produtos/:id (fornecedor) não traz slides; snapshot da planilha preenche o formulário. */
 function detalheToFormData(produto: ProdutoCadastroDetalhe, snapshot: ProdutoPreCadastroPayload | null): ProdutoFormData {
   const snap = snapshot;
 
@@ -210,8 +269,8 @@ function detalheToFormData(produto: ProdutoCadastroDetalhe, snapshot: ProdutoPre
 
   return {
     descProduto: produto.descProduto ?? '',
-    descProdutoNf: produto.descProdutoNf ?? '',
-    referFabricante: produto.referFabricante ?? '',
+    descProdutoNf: pickFirstNonEmpty(produto.descProdutoNf, snap?.descProdutoNf ?? undefined),
+    referFabricante: pickFirstNonEmpty(produto.referFabricante, snap?.referFabricante ?? undefined),
     fabricante: pickFirstNonEmpty(produto.fabricante, snap?.fabricante ?? undefined),
     composicao: pickFirstNonEmpty(produto.composicao, snap?.composicao ?? undefined),
     cest: pickFirstNonEmpty(produto.cest, snap?.cest ?? undefined),
@@ -236,30 +295,10 @@ function detalheToFormData(produto: ProdutoCadastroDetalhe, snapshot: ProdutoPre
     descricaoTecnica: pickFirstNonEmpty(produto.descricaoTecnica, snap?.descricaoTecnica ?? undefined),
     descricaoEmocional: pickFirstNonEmpty(produto.descricaoEmocional, snap?.descricaoEmocional ?? undefined),
     peso: pesoStr,
-    cores: (produto.cores ?? []).map((c) => ({
-      codCor: c.codCor ?? '',
-      descCor: c.descCor ?? '',
-      origemCor: c.origemCor ?? '',
-      corFabricante: c.corFabricante ?? '',
-      ncm: c.ncm ?? '',
-    })),
-    precos: (produto.precos ?? []).map((p) => ({
-      codigoTabelaPreco: p.codigoTabelaPreco ?? '',
-      preco: Number(p.preco ?? 0),
-    })),
-    fotos: (produto.fotos ?? []).map((f) => ({
-      corLinx: f.corLinx ?? '',
-      nomeArquivo: f.nomeArquivo ?? '',
-      caminhoArquivo: f.caminhoArquivo ?? '',
-      base64Foto: f.base64Foto ?? '',
-      ordemFoto: f.ordemFoto == null ? null : Number(f.ordemFoto),
-    })),
-    barras: (produto.barras ?? []).map((b) => ({
-      codigoBarra: b.codigoBarra ?? '',
-      corProduto: b.corProduto ?? '',
-      tamanho: b.tamanho ?? '',
-      grade: b.grade ?? '',
-    })),
+    cores: mapCoresToForm(produto, snap),
+    precos: mapPrecosToForm(produto, snap),
+    fotos: mapFotosToForm(produto, snap),
+    barras: mapBarrasToForm(produto, snap),
   };
 }
 
@@ -315,6 +354,7 @@ export function ProdutoCadastro({
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const motivoDevolucao = motivoDevolucaoCompras(formData.obsFornecedor);
 
   const [loadingCombos, setLoadingCombos] = useState(false);
   const [combosDisponiveis, setCombosDisponiveis] = useState(false);
@@ -415,7 +455,7 @@ export function ProdutoCadastro({
       const snapshot = loadProdutoPreCadastroSnapshot(produtoDetalhe.id);
       setFormData(detalheToFormData(produtoDetalhe, snapshot));
     }
-  }, [mode, produtoDetalhe]);
+  }, [mode, produtoDetalhe, produtoId]);
 
   const handleChange = (field: keyof ProdutoFormData, value: string) => {
     setFormData({ ...formData, [field]: value });
@@ -539,7 +579,6 @@ export function ProdutoCadastro({
     if (!session?.token) {
       toast.error('Sessão expirada', {
         description: 'Faça login novamente.',
-        duration: 2500,
       });
       navigate('/fornecedor/cnpj');
       return;
@@ -560,7 +599,6 @@ export function ProdutoCadastro({
 
         toast.success('Produto atualizado com sucesso!', {
           description: 'O pré-cadastro foi salvo.',
-          duration: 2000,
         });
       } else {
         const criado = await criarPreCadastroProduto(session.token, payload);
@@ -568,7 +606,6 @@ export function ProdutoCadastro({
 
         toast.success('Produto cadastrado com sucesso!', {
           description: 'O pré-cadastro foi salvo e está disponível no dashboard.',
-          duration: 2000,
         });
       }
 
@@ -578,7 +615,6 @@ export function ProdutoCadastro({
     } catch (error) {
       toast.error(mode === 'edit' ? 'Não foi possível atualizar o produto.' : 'Não foi possível cadastrar o produto.', {
         description: error instanceof ApiError || error instanceof Error ? error.message : 'Tente novamente mais tarde.',
-        duration: 3000,
       });
     } finally {
       setIsSubmitting(false);
@@ -586,6 +622,18 @@ export function ProdutoCadastro({
   };
 
   const isFormValid = Boolean(formData.descProduto && formData.referFabricante);
+
+  if (isLoading) {
+    return (
+      <Layout>
+        <div className="w-full max-w-7xl py-8">
+          <div className="bg-white/10 backdrop-blur-xl rounded-3xl p-12 border-2 border-white/20 shadow-2xl">
+            <LoadingBlock message="Carregando produto..." size="lg" />
+          </div>
+        </div>
+      </Layout>
+    );
+  }
 
   return (
     <Layout>
@@ -602,6 +650,17 @@ export function ProdutoCadastro({
           </div>
 
           <div className="space-y-8">
+            {motivoDevolucao && !isReadOnly && (
+              <div className="rounded-xl border border-amber-400/40 bg-amber-500/15 px-5 py-4">
+                <p className="text-amber-100 font-semibold text-sm mb-1" style={{ fontFamily: 'Outfit, sans-serif' }}>
+                  Devolvido por compras — corrija e reenvie
+                </p>
+                <p className="text-white/90 text-sm whitespace-pre-wrap" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 300 }}>
+                  {motivoDevolucao}
+                </p>
+              </div>
+            )}
+
             <div className="bg-white/5 backdrop-blur-sm rounded-2xl p-6 border border-white/10">
               <div className="flex items-center gap-3 mb-6">
                 <Package className="w-6 h-6 text-white" />

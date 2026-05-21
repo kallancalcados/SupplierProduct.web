@@ -65,7 +65,6 @@ export function FornecedorLogin() {
 
       toast.success('Login realizado com sucesso!', {
         description: 'Redirecionando para o dashboard...',
-        duration: 1500,
       });
 
       setTimeout(() => {

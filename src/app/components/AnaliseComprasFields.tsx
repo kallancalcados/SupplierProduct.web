@@ -19,6 +19,7 @@ import {
   listarErpUnidades,
 } from '../lib/supplier-api';
 import { Combobox, type ComboboxOption } from './ui/combobox';
+import { LoadingOverlay } from './ui/loading-state';
 
 export interface AnaliseComprasFormState {
   grupoProduto: string;
@@ -37,6 +38,7 @@ export interface AnaliseComprasFormState {
   indicadorCfop: string;
   periodoPcp: string;
   redeLojas: string;
+  codProdutoSolucao: string;
   codProdutoSegmento: string;
   obsCompras: string;
   contaContabil: string;
@@ -327,6 +329,7 @@ export function AnaliseComprasFields({
   const placeholderCombo = loadingCombos ? 'Carregando ERP…' : 'Selecione…';
 
   return (
+    <LoadingOverlay loading={loadingCombos} message="Carregando opções do ERP...">
     <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
       <div>
         <label className="block text-white/90 mb-2 text-sm" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 400 }}>
@@ -772,6 +775,20 @@ export function AnaliseComprasFields({
 
       <div>
         <label className="block text-white/90 mb-2 text-sm" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 400 }}>
+          Código Produto Solução
+        </label>
+        <input
+          type="text"
+          value={formCompras.codProdutoSolucao}
+          onChange={(e) => setFormCompras({ ...formCompras, codProdutoSolucao: e.target.value })}
+          disabled={disabled}
+          className={inputClass}
+          style={{ fontFamily: 'Outfit, sans-serif' }}
+        />
+      </div>
+
+      <div>
+        <label className="block text-white/90 mb-2 text-sm" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 400 }}>
           Código Produto Segmento
         </label>
         <input
@@ -942,5 +959,6 @@ export function AnaliseComprasFields({
         </div>
       </div>
     </div>
+    </LoadingOverlay>
   );
 }

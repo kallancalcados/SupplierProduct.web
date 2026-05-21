@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router';
 import { Layout } from './Layout';
 import { Building2, UserCircle } from 'lucide-react';
 import { ImageWithFallback } from './ui/image-with-fallback';
+import { kallanMarkSrc } from './kallan-mark';
 
 export function Home() {
   const navigate = useNavigate();
@@ -13,7 +14,7 @@ export function Home() {
         <div className="text-center mb-16">
           <div className="flex justify-center mb-8">
             <ImageWithFallback
-              src="/src/imports/kallan-mark.png"
+              src={kallanMarkSrc}
               alt="Kallan"
               className="w-24 h-24 drop-shadow-2xl animate-[fadeIn_1s_ease-out]"
             />

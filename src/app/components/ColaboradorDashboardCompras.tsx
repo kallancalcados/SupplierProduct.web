@@ -1,119 +1,40 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router';
 import { Layout } from './Layout';
-import { LogOut, CheckCircle, XCircle, Filter } from 'lucide-react';
+import { LogOut, CheckCircle, XCircle, Filter, RefreshCw } from 'lucide-react';
 import { ImageWithFallback } from './ui/image-with-fallback';
+import { kallanMarkSrc } from './kallan-mark';
 import { toast } from 'sonner';
 import { ProdutoDetalhesModal } from './ProdutoDetalhesModal';
+import { LoadingOverlay } from './ui/loading-state';
+import { ProdutoImportacaoPlanilhaActions, type ProdutoResumoPlanilha } from './ProdutoImportacaoPlanilhaActions';
+import {
+  getStatusProdutoColor,
+  labelStatusProduto,
+  motivoDevolucaoFiscal,
+  STATUS_PRODUTO_APROVADO_INTEGRACAO,
+} from '../../constants/produto-status-fluxo';
 import {
   ApiError,
   aprovarCompras,
   enriquecerNcmListaDetalheInterno,
-  listarPendentesCompras,
-  ncmPrincipalDoProduto,
+  listarTodosCadastrosCompletos,
   obterProdutoCadastroInterno,
   reprovarCompras,
   comprasAnaliseDraftStorageKey,
-  type ProdutoCadastroDetalhe,
   type ProdutoPendenteCompras,
 } from '../lib/supplier-api';
+import { mapProdutoCadastroDetalheCompleto, type ProdutoDetalheCompleto } from '../lib/map-produto-detalhe';
 
-interface Cor {
-  codCor: string;
-  descCor: string;
-  origemCor: string;
-  corFabricante: string;
-  ncm: string;
-}
-
-interface Preco {
-  codigoTabelaPreco: string;
-  preco: number;
-}
-
-interface Foto {
-  corLinx: string;
-  nomeArquivo: string;
-  caminhoArquivo: string;
-  base64Foto: string;
-  ordemFoto: number;
-}
-
-interface Barra {
-  codigoBarra: string;
-  corProduto: string;
-  tamanho: string;
-  grade: string;
-}
-
-interface Product {
-  id: number;
-  descProduto: string;
-  descProdutoNf: string;
-  referFabricante: string;
-  ncm: string;
-  statusFluxo: number;
-  dataCadastro: string;
-  fornecedor: string;
-  tipoProduto?: string;
-  fabricante?: string;
-  composicao?: string;
-  grade?: string;
-  linha?: string;
-  griffe?: string;
-  colecao?: string;
-  obsFornecedor?: string;
-  cores?: Cor[];
-  precos?: Preco[];
-  fotos?: Foto[];
-  barras?: Barra[];
-}
-
-/** Alinhado ao enum StatusProdutoCadastro (backend). */
-const STATUS_FLUXO: { [key: number]: string } = {
-  1: 'Pré-Cadastro Fornecedor',
-  2: 'Aguardando Compras',
-  3: 'Em Análise Compras',
-  4: 'Aguardando Fiscal',
-  5: 'Em Análise Fiscal',
-  6: 'Aprovado para Integração',
-  7: 'Integrado ERP',
-  8: 'Reprovado Compras',
-  9: 'Reprovado Fiscal',
-};
-
-const getStatusColor = (status: number) => {
-  switch (status) {
-    case 1:
-      return 'bg-blue-500/20 text-blue-100 border-blue-400/30';
-    case 2:
-      return 'bg-yellow-500/20 text-yellow-100 border-yellow-400/30';
-    case 3:
-      return 'bg-orange-500/20 text-orange-100 border-orange-400/30';
-    case 4:
-      return 'bg-purple-500/20 text-purple-100 border-purple-400/30';
-    case 5:
-      return 'bg-indigo-500/20 text-indigo-100 border-indigo-400/30';
-    case 6:
-      return 'bg-green-500/20 text-green-100 border-green-400/30';
-    case 7:
-      return 'bg-emerald-500/20 text-emerald-100 border-emerald-400/30';
-    case 8:
-      return 'bg-red-500/20 text-red-100 border-red-400/30';
-    case 9:
-      return 'bg-red-500/20 text-red-100 border-red-400/30';
-    default:
-      return 'bg-gray-500/20 text-gray-100 border-gray-400/30';
-  }
-};
+type Product = ProdutoDetalheCompleto;
 
 type FilterType = 'all' | 'aguardando' | 'analise' | 'aguardandoFiscal' | 'integrado';
 
-/** Status após compras aprovar até integração no ERP (conforme `PRODUTO_CADASTRO.STATUS_FLUXO`). */
-const FISCAL_PIPELINE_STATUS = new Set([4, 5, 6]);
+/** Acompanhamento pós-fiscal: apenas status 6 (Aprovado para Integração). */
+const APROVADO_INTEGRACAO_STATUS = STATUS_PRODUTO_APROVADO_INTEGRACAO;
 
-/** Status exibidos no dashboard de compras (acompanhamento do pipeline). */
-const COMPRAS_DASHBOARD_STATUS = new Set([2, 3, 4, 5, 6, 7]);
+/** Status exibidos no dashboard de compras (inclui devolução fiscal legada — status 9). */
+const COMPRAS_DASHBOARD_STATUS = new Set([2, 3, 4, 5, 6, 7, 9]);
 
 function statusFluxoFromPendenteCompras(p: ProdutoPendenteCompras): number {
   const r = p as unknown as Record<string, unknown>;
@@ -142,59 +63,6 @@ function mapPendenteToProduct(p: ProdutoPendenteCompras): Product {
   };
 }
 
-function statusFluxoFromDetalhe(d: ProdutoCadastroDetalhe): number {
-  const r = d as unknown as Record<string, unknown>;
-  const raw = r.statusFluxo ?? r.StatusFluxo;
-  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : d.statusFluxo;
-}
-
-function mapInternoToProduct(d: ProdutoCadastroDetalhe, nomeFornecedor: string): Product {
-  return {
-    id: d.id,
-    descProduto: d.descProduto,
-    descProdutoNf: d.descProdutoNf ?? '',
-    referFabricante: d.referFabricante ?? '',
-    ncm: ncmPrincipalDoProduto(d.ncm, d.cores) ?? '',
-    statusFluxo: statusFluxoFromDetalhe(d),
-    dataCadastro: d.dataCadastro,
-    fornecedor: nomeFornecedor,
-    tipoProduto: d.tipoProduto ?? undefined,
-    fabricante: d.fabricante ?? undefined,
-    composicao: d.composicao ?? undefined,
-    grade: d.grade ?? undefined,
-    linha: d.linha ?? undefined,
-    griffe: d.griffe ?? undefined,
-    colecao: d.colecao ?? undefined,
-    obsFornecedor: d.obsFornecedor ?? undefined,
-    cores: (d.cores ?? []).map((c) => ({
-      codCor: c.codCor ?? '',
-      descCor: c.descCor ?? '',
-      origemCor: c.origemCor ?? '',
-      corFabricante: c.corFabricante ?? '',
-      ncm: c.ncm ?? '',
-    })),
-    precos: (d.precos ?? []).map((pr) => ({
-      codigoTabelaPreco: pr.codigoTabelaPreco ?? '',
-      preco: Number(pr.preco ?? 0),
-    })),
-    fotos: (d.fotos ?? []).map((f) => ({
-      corLinx: f.corLinx ?? '',
-      nomeArquivo: f.nomeArquivo ?? '',
-      caminhoArquivo: f.caminhoArquivo ?? '',
-      base64Foto: f.base64Foto ?? '',
-      ordemFoto: f.ordemFoto,
-    })),
-    barras: (d.barras ?? []).map((b) => ({
-      codigoBarra: b.codigoBarra ?? '',
-      corProduto: b.corProduto ?? '',
-      tamanho: b.tamanho ?? '',
-      grade: b.grade ?? '',
-    })),
-  };
-}
-
 export function ColaboradorDashboardCompras() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -206,41 +74,40 @@ export function ColaboradorDashboardCompras() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoadingList, setIsLoadingList] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [detailLoadingId, setDetailLoadingId] = useState<number | null>(null);
 
-  const loadPendentes = useCallback(async () => {
-    setIsLoadingList(true);
+  const loadPendentes = useCallback(async (options?: { showOverlay?: boolean }) => {
+    const showOverlay = options?.showOverlay === true;
+    if (showOverlay) {
+      setIsLoadingList(true);
+    } else {
+      setIsRefreshing(true);
+    }
     try {
       setLoadError(null);
-      const rows = await listarPendentesCompras();
-      const mapped = (rows ?? []).map((p) => mapPendenteToProduct(p));
+      const rows = await listarTodosCadastrosCompletos();
+      const mapped = (rows ?? [])
+        .filter((p) => COMPRAS_DASHBOARD_STATUS.has(statusFluxoFromPendenteCompras(p)))
+        .map((p) => mapPendenteToProduct(p));
       const enriched = await enriquecerNcmListaDetalheInterno(mapped);
       setProducts(enriched);
     } catch (error) {
       const message =
         error instanceof ApiError || error instanceof Error ? error.message : 'Erro ao carregar lista.';
       setLoadError(message);
-      toast.error('Não foi possível carregar produtos pendentes de compras.', { description: message });
+      toast.error('Não foi possível carregar a listagem de cadastros.', { description: message });
     } finally {
-      setIsLoadingList(false);
+      if (showOverlay) {
+        setIsLoadingList(false);
+      } else {
+        setIsRefreshing(false);
+      }
     }
   }, []);
 
   useEffect(() => {
-    void loadPendentes();
-  }, [loadPendentes]);
-
-  useEffect(() => {
-    const tick = () => void loadPendentes();
-    const iv = window.setInterval(tick, 45_000);
-    const onVis = () => {
-      if (document.visibilityState === 'visible') tick();
-    };
-    document.addEventListener('visibilitychange', onVis);
-    return () => {
-      window.clearInterval(iv);
-      document.removeEventListener('visibilitychange', onVis);
-    };
+    void loadPendentes({ showOverlay: true });
   }, [loadPendentes]);
 
   const formatDate = (dateString: string) => {
@@ -268,11 +135,10 @@ export function ColaboradorDashboardCompras() {
       toast.success('Produto aprovado por compras!', {
         description:
           'O cadastro segue para a fila fiscal; a lista abaixo acompanha o status gravado em PRODUTO_CADASTRO (atualização automática).',
-        duration: 4000,
       });
       setIsModalOpen(false);
       setSelectedProduct(null);
-      setActiveFilter('aguardandoFiscal');
+      setActiveFilter('aguardando');
       await loadPendentes();
     } catch (error) {
       let desc = error instanceof ApiError || error instanceof Error ? error.message : undefined;
@@ -306,15 +172,17 @@ export function ColaboradorDashboardCompras() {
     }
 
     try {
-      await reprovarCompras(id, { motivo: motivo.trim() });
+      const res = await reprovarCompras(id, { motivo: motivo.trim() });
       try {
         window.sessionStorage.removeItem(comprasAnaliseDraftStorageKey(id));
       } catch {
         /* ignore */
       }
-      toast.error('Produto reprovado por compras.', {
-        description: 'O fornecedor será notificado pelo status do cadastro.',
-        duration: 4000,
+      toast.warning('Produto devolvido ao fornecedor.', {
+        description:
+          res.statusFluxo === 1
+            ? `Motivo registrado. O fornecedor pode corrigir e reenviar (status ${res.statusFluxo}).`
+            : `Status atual: ${res.statusFluxo}.`,
       });
       setIsModalOpen(false);
       setSelectedProduct(null);
@@ -334,7 +202,7 @@ export function ColaboradorDashboardCompras() {
     setDetailLoadingId(productId);
     try {
       const detalhe = await obterProdutoCadastroInterno(productId);
-      setSelectedProduct(mapInternoToProduct(detalhe, row.fornecedor));
+      setSelectedProduct(mapProdutoCadastroDetalheCompleto(detalhe, row.fornecedor));
       setIsModalOpen(true);
     } catch (error) {
       toast.error('Não foi possível carregar o cadastro completo do produto.', {
@@ -345,14 +213,25 @@ export function ColaboradorDashboardCompras() {
     }
   };
 
+  const produtosParaModeloCompras = useMemo((): ProdutoResumoPlanilha[] => {
+    return products
+      .filter((p) => p.statusFluxo === 2 || p.statusFluxo === 3 || p.statusFluxo === 9)
+      .map((p) => ({
+        id: p.id,
+        referFabricante: p.referFabricante,
+        descProduto: p.descProduto,
+        fornecedor: p.fornecedor,
+      }));
+  }, [products]);
+
   const filteredProducts = products.filter((product) => {
     switch (activeFilter) {
       case 'aguardando':
-        return product.statusFluxo === 2;
+        return product.statusFluxo === 2 || product.statusFluxo === 9;
       case 'analise':
         return product.statusFluxo === 3;
       case 'aguardandoFiscal':
-        return FISCAL_PIPELINE_STATUS.has(product.statusFluxo);
+        return product.statusFluxo === APROVADO_INTEGRACAO_STATUS;
       case 'integrado':
         return product.statusFluxo === 7;
       case 'all':
@@ -362,9 +241,9 @@ export function ColaboradorDashboardCompras() {
   });
 
   const counts = {
-    aguardando: products.filter((p) => p.statusFluxo === 2).length,
+    aguardando: products.filter((p) => p.statusFluxo === 2 || p.statusFluxo === 9).length,
     analise: products.filter((p) => p.statusFluxo === 3).length,
-    aguardandoFiscal: products.filter((p) => FISCAL_PIPELINE_STATUS.has(p.statusFluxo)).length,
+    aguardandoFiscal: products.filter((p) => p.statusFluxo === APROVADO_INTEGRACAO_STATUS).length,
     integrado: products.filter((p) => p.statusFluxo === 7).length,
   };
 
@@ -374,7 +253,7 @@ export function ColaboradorDashboardCompras() {
         <div className="animate-[fadeIn_0.6s_ease-out]">
           <div className="flex items-center justify-between mb-8">
             <div className="flex items-center gap-6">
-              <ImageWithFallback src="/src/imports/kallan-mark.png" alt="Kallan" className="w-20 h-20 drop-shadow-2xl" />
+              <ImageWithFallback src={kallanMarkSrc} alt="Kallan" className="w-20 h-20 drop-shadow-2xl" />
               <div>
                 <h1 className="text-5xl font-bold text-white mb-2" style={{ fontFamily: 'Playfair Display, serif' }}>
                   Dashboard Compras
@@ -383,20 +262,37 @@ export function ColaboradorDashboardCompras() {
                   Bem-vindo, <span className="font-medium">{userName}</span>
                 </p>
                 <p className="text-white/55 text-sm mt-3 max-w-2xl" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 300 }}>
-                  A lista reflete o STATUS_FLUXO em PRODUTO_CADASTRO: 2 aguardando compras, 3 após salvar análise de compras, 4–6 no
-                  fluxo fiscal até integração, 7 integrado ao ERP. A página atualiza periodicamente; reprovações (8/9) saem desta
-                  visão.
+                  Reprovação fiscal devolve o produto para compras (status 2) com o motivo em OBS_FISCAL. Reprovação de compras devolve ao
+                  fornecedor (status 1) com o motivo nas observações do cadastro.
                 </p>
               </div>
             </div>
-            <button
-              onClick={() => navigate('/')}
-              className="flex items-center gap-3 bg-white/10 backdrop-blur-sm hover:bg-white/20 text-white px-6 py-3 rounded-xl border-2 border-white/20 hover:border-white/40 transition-all duration-300"
-              style={{ fontFamily: 'Outfit, sans-serif' }}
-            >
-              <LogOut className="w-5 h-5" />
-              Sair
-            </button>
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              <ProdutoImportacaoPlanilhaActions
+                area="compras"
+                disabled={isLoadingList || isRefreshing}
+                produtosParaModelo={produtosParaModeloCompras}
+                onImportComplete={() => void loadPendentes({ showOverlay: true })}
+              />
+              <button
+                type="button"
+                onClick={() => void loadPendentes({ showOverlay: true })}
+                disabled={isLoadingList || isRefreshing}
+                className="flex items-center gap-3 bg-white/10 backdrop-blur-sm hover:bg-white/20 text-white px-6 py-3 rounded-xl border-2 border-white/20 hover:border-white/40 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ fontFamily: 'Outfit, sans-serif' }}
+              >
+                <RefreshCw className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                Atualizar
+              </button>
+              <button
+                onClick={() => navigate('/')}
+                className="flex items-center gap-3 bg-white/10 backdrop-blur-sm hover:bg-white/20 text-white px-6 py-3 rounded-xl border-2 border-white/20 hover:border-white/40 transition-all duration-300"
+                style={{ fontFamily: 'Outfit, sans-serif' }}
+              >
+                <LogOut className="w-5 h-5" />
+                Sair
+              </button>
+            </div>
           </div>
 
           {loadError && (
@@ -455,7 +351,7 @@ export function ColaboradorDashboardCompras() {
             >
               <div className="flex items-center justify-between mb-3">
                 <p className="text-white/70 text-sm" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 300 }}>
-                  Aguardando Fiscal
+                  Aprovado para Integração
                 </p>
                 <div className="bg-purple-500/30 rounded-full p-2">
                   <Filter className="w-5 h-5 text-purple-200" />
@@ -492,7 +388,7 @@ export function ColaboradorDashboardCompras() {
                 <h2 className="text-3xl font-bold text-white mb-2" style={{ fontFamily: 'Playfair Display, serif' }}>
                   {activeFilter === 'aguardando' && 'Produtos Aguardando Compras'}
                   {activeFilter === 'analise' && 'Produtos Em Análise Compras'}
-                  {activeFilter === 'aguardandoFiscal' && 'Produtos na fila fiscal (acompanhamento)'}
+                  {activeFilter === 'aguardandoFiscal' && 'Produtos aprovados para integração (acompanhamento)'}
                   {activeFilter === 'integrado' && 'Produtos Integrados no ERP'}
                   {activeFilter === 'all' && 'Todos os Produtos'}
                 </h2>
@@ -502,6 +398,7 @@ export function ColaboradorDashboardCompras() {
               </div>
             </div>
 
+            <LoadingOverlay loading={isLoadingList} message="Carregando produtos...">
             <div className="overflow-x-auto rounded-xl border-2 border-white/20">
               <table className="w-full">
                 <thead>
@@ -533,7 +430,11 @@ export function ColaboradorDashboardCompras() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredProducts.length === 0 ? (
+                  {isLoadingList ? (
+                    <tr aria-hidden>
+                      <td colSpan={8} className="h-40" />
+                    </tr>
+                  ) : filteredProducts.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="px-6 py-12 text-center">
                         <p className="text-white/60 text-lg" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 300 }}>
@@ -565,10 +466,10 @@ export function ColaboradorDashboardCompras() {
                         </td>
                         <td className="px-4 py-5">
                           <span
-                            className={`inline-flex px-3 py-1 rounded-full text-xs font-medium border ${getStatusColor(product.statusFluxo)}`}
+                            className={`inline-flex px-3 py-1 rounded-full text-xs font-medium border ${getStatusProdutoColor(product.statusFluxo)}`}
                             style={{ fontFamily: 'Outfit, sans-serif' }}
                           >
-                            {STATUS_FLUXO[product.statusFluxo] || 'Desconhecido'}
+                            {labelStatusProduto(product.statusFluxo)}
                           </span>
                         </td>
                         <td className="px-4 py-5 text-white/70 text-sm" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 300 }}>
@@ -576,14 +477,20 @@ export function ColaboradorDashboardCompras() {
                         </td>
                         <td className="px-4 py-5">
                           <div className="flex items-center justify-center gap-2">
-                            {product.statusFluxo === 2 && (
+                            {(product.statusFluxo === 2 || product.statusFluxo === 9) && (
                               <button
                                 onClick={() => handleIniciarAnalise(product.id)}
                                 disabled={detailLoadingId === product.id}
                                 className="text-white bg-orange-500/30 hover:bg-orange-500/50 transition-all duration-200 px-3 py-2 rounded-lg border border-orange-400/30 text-xs disabled:opacity-50"
                                 style={{ fontFamily: 'Outfit, sans-serif' }}
                               >
-                                {detailLoadingId === product.id ? 'Carregando...' : 'Analisar cadastro'}
+                                {detailLoadingId === product.id
+                                  ? 'Carregando...'
+                                  : product.statusFluxo === 9
+                                    ? 'Corrigir (devolvido fiscal)'
+                                    : motivoDevolucaoFiscal(product.obsFiscal)
+                                      ? 'Revisar (devolvido fiscal)'
+                                      : 'Analisar cadastro'}
                               </button>
                             )}
                             {product.statusFluxo === 3 && (
@@ -614,9 +521,9 @@ export function ColaboradorDashboardCompras() {
                                 </button>
                               </>
                             )}
-                            {FISCAL_PIPELINE_STATUS.has(product.statusFluxo) && (
+                            {product.statusFluxo === APROVADO_INTEGRACAO_STATUS && (
                               <span className="text-white/45 text-xs text-center block" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 300 }}>
-                                Acompanhamento fiscal (somente leitura neste painel)
+                                Aprovado para integração (somente leitura neste painel)
                               </span>
                             )}
                             {product.statusFluxo === 7 && (
@@ -632,6 +539,7 @@ export function ColaboradorDashboardCompras() {
                 </tbody>
               </table>
             </div>
+            </LoadingOverlay>
           </div>
         </div>
       </div>

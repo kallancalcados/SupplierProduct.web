@@ -1,10 +1,18 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router';
 import { Layout } from './Layout';
-import { Plus, LogOut, Send, X, Eye } from 'lucide-react';
+import { Plus, LogOut, Send, X, Eye, RefreshCw } from 'lucide-react';
 import { ImageWithFallback } from './ui/image-with-fallback';
+import { kallanMarkSrc } from './kallan-mark';
+import { LoadingOverlay } from './ui/loading-state';
+import { ProdutoImportacaoPlanilhaActions } from './ProdutoImportacaoPlanilhaActions';
 import { toast } from 'sonner';
 import { clearAuthSession, getAuthSession } from '../lib/auth-storage';
+import {
+  getStatusProdutoColor,
+  isEditavelFornecedor,
+  labelStatusProduto,
+} from '../../constants/produto-status-fluxo';
 import {
   ApiError,
   enriquecerNcmResumosFornecedor,
@@ -19,42 +27,6 @@ type Product = ProdutoCadastroResumo;
 
 type FornecedorData = FornecedorDataApi;
 
-const STATUS_FLUXO: { [key: number]: string } = {
-  1: 'Pré-Cadastro Fornecedor',
-  2: 'Aguardando Compras',
-  3: 'Em Análise Compras',
-  4: 'Aguardando Fiscal',
-  5: 'Em Análise Fiscal',
-  6: 'Aprovado para Integração',
-  7: 'Integrado ERP',
-  8: 'Reprovado Compras',
-  9: 'Reprovado Fiscal',
-};
-
-const getStatusColor = (status: number) => {
-  switch (status) {
-    case 1:
-      return 'bg-blue-500/20 text-blue-100 border-blue-400/30';
-    case 2:
-      return 'bg-yellow-500/20 text-yellow-100 border-yellow-400/30';
-    case 3:
-      return 'bg-orange-500/20 text-orange-100 border-orange-400/30';
-    case 4:
-      return 'bg-purple-500/20 text-purple-100 border-purple-400/30';
-    case 5:
-      return 'bg-indigo-500/20 text-indigo-100 border-indigo-400/30';
-    case 6:
-      return 'bg-green-500/20 text-green-100 border-green-400/30';
-    case 7:
-      return 'bg-emerald-500/20 text-emerald-100 border-emerald-400/30';
-    case 8:
-    case 9:
-      return 'bg-red-500/20 text-red-100 border-red-400/30';
-    default:
-      return 'bg-gray-500/20 text-gray-100 border-gray-400/30';
-  }
-};
-
 export function FornecedorDashboard() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -65,19 +37,23 @@ export function FornecedorDashboard() {
   const [isLoadingFornecedor, setIsLoadingFornecedor] = useState(false);
 
   const [products, setProducts] = useState<Product[]>([]);
-  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
+  const [isLoadingProducts, setIsLoadingProducts] = useState(true);
 
   const [selectedProducts, setSelectedProducts] = useState<number[]>([]);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  useEffect(() => {
-    if (!session?.token) {
-      navigate('/fornecedor/cnpj');
-      return;
-    }
-
-    const load = async () => {
-      setIsLoadingProducts(true);
-
+  const loadProducts = useCallback(
+    async (options?: { showOverlay?: boolean }) => {
+      if (!session?.token) {
+        navigate('/fornecedor/cnpj');
+        return;
+      }
+      const showOverlay = options?.showOverlay === true;
+      if (showOverlay) {
+        setIsLoadingProducts(true);
+      } else {
+        setIsRefreshing(true);
+      }
       try {
         const data = await listarMeusCadastrosProdutos(session.token);
         const comNcm = await enriquecerNcmResumosFornecedor(session.token, data);
@@ -85,15 +61,21 @@ export function FornecedorDashboard() {
       } catch (error) {
         toast.error('Não foi possível carregar seus produtos.', {
           description: error instanceof ApiError || error instanceof Error ? error.message : 'Tente novamente mais tarde.',
-          duration: 2500,
         });
       } finally {
-        setIsLoadingProducts(false);
+        if (showOverlay) {
+          setIsLoadingProducts(false);
+        } else {
+          setIsRefreshing(false);
+        }
       }
-    };
+    },
+    [navigate, session?.token],
+  );
 
-    void load();
-  }, [navigate, session?.token]);
+  useEffect(() => {
+    void loadProducts({ showOverlay: true });
+  }, [loadProducts]);
 
   useEffect(() => {
     if (fornecedorData || !session?.cgcCpf) {
@@ -109,7 +91,6 @@ export function FornecedorDashboard() {
       } catch (error) {
         toast.error('Não foi possível carregar os dados do fornecedor.', {
           description: error instanceof Error ? error.message : 'Tente novamente mais tarde.',
-          duration: 2500,
         });
       } finally {
         setIsLoadingFornecedor(false);
@@ -122,10 +103,9 @@ export function FornecedorDashboard() {
   const handleSelectProduct = (productId: number) => {
     const product = products.find((p) => p.id === productId);
 
-    if (product && product.statusFluxo !== 1) {
+    if (product && !isEditavelFornecedor(product.statusFluxo)) {
       toast.error('Produto não pode ser selecionado', {
-        description: 'Apenas produtos em Pré-Cadastro podem ser enviados.',
-        duration: 2000,
+        description: 'Apenas produtos em pré-cadastro ou devolvidos por compras podem ser reenviados.',
       });
       return;
     }
@@ -134,7 +114,7 @@ export function FornecedorDashboard() {
   };
 
   const handleSelectAll = () => {
-    const productosSelectionaveis = products.filter((p) => p.statusFluxo === 1);
+    const productosSelectionaveis = products.filter((p) => isEditavelFornecedor(p.statusFluxo));
 
     if (selectedProducts.length === productosSelectionaveis.length && productosSelectionaveis.length > 0) {
       setSelectedProducts([]);
@@ -156,7 +136,6 @@ export function FornecedorDashboard() {
     if (selectedProducts.length === 0) {
       toast.error('Nenhum produto selecionado', {
         description: 'Selecione ao menos um produto para enviar.',
-        duration: 2000,
       });
       return;
     }
@@ -167,19 +146,16 @@ export function FornecedorDashboard() {
         await enviarProdutoParaCompras(session.token, id);
       }
 
-      const data = await listarMeusCadastrosProdutos(session.token);
-      setProducts(data);
+      await loadProducts();
 
       toast.success('Produtos enviados com sucesso!', {
         description: `${selectedProducts.length} produto(s) encaminhado(s) para Compras.`,
-        duration: 3000,
       });
 
       setSelectedProducts([]);
     } catch (error) {
       toast.error('Não foi possível enviar os produtos.', {
         description: error instanceof ApiError || error instanceof Error ? error.message : 'Tente novamente mais tarde.',
-        duration: 3000,
       });
     }
   };
@@ -195,7 +171,7 @@ export function FornecedorDashboard() {
     });
   };
 
-  const productosSelectionaveis = products.filter((p) => p.statusFluxo === 1);
+  const productosSelectionaveis = products.filter((p) => isEditavelFornecedor(p.statusFluxo));
   const allSelectableSelected = productosSelectionaveis.length > 0 && selectedProducts.length === productosSelectionaveis.length;
 
   return (
@@ -243,7 +219,7 @@ export function FornecedorDashboard() {
           <div className="flex items-center justify-between mb-8">
             <div className="flex items-center gap-6">
               <ImageWithFallback
-                src="/src/imports/kallan-mark.png"
+                src={kallanMarkSrc}
                 alt="Kallan"
                 className="w-20 h-20 drop-shadow-2xl"
               />
@@ -257,17 +233,35 @@ export function FornecedorDashboard() {
                 </p>
               </div>
             </div>
-            <button
-              onClick={() => {
-                clearAuthSession();
-                navigate('/');
-              }}
-              className="flex items-center gap-3 bg-white/10 backdrop-blur-sm hover:bg-white/20 text-white px-6 py-3 rounded-xl border-2 border-white/20 hover:border-white/40 transition-all duration-300"
-              style={{ fontFamily: 'Outfit, sans-serif' }}
-            >
-              <LogOut className="w-5 h-5" />
-              Sair
-            </button>
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              <ProdutoImportacaoPlanilhaActions
+                area="fornecedor"
+                token={session?.token}
+                disabled={isLoadingProducts || isRefreshing}
+                onImportComplete={() => void loadProducts({ showOverlay: true })}
+              />
+              <button
+                type="button"
+                onClick={() => void loadProducts({ showOverlay: true })}
+                disabled={isLoadingProducts || isRefreshing}
+                className="flex items-center gap-3 bg-white/10 backdrop-blur-sm hover:bg-white/20 text-white px-6 py-3 rounded-xl border-2 border-white/20 hover:border-white/40 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ fontFamily: 'Outfit, sans-serif' }}
+              >
+                <RefreshCw className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                Atualizar
+              </button>
+              <button
+                onClick={() => {
+                  clearAuthSession();
+                  navigate('/');
+                }}
+                className="flex items-center gap-3 bg-white/10 backdrop-blur-sm hover:bg-white/20 text-white px-6 py-3 rounded-xl border-2 border-white/20 hover:border-white/40 transition-all duration-300"
+                style={{ fontFamily: 'Outfit, sans-serif' }}
+              >
+                <LogOut className="w-5 h-5" />
+                Sair
+              </button>
+            </div>
           </div>
 
           {/* Dados do Fornecedor */}
@@ -364,9 +358,9 @@ export function FornecedorDashboard() {
                   <p className="text-white/60 text-sm" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 300 }}>
                     Carregando produtos...
                   </p>
-                ) : products.filter((p) => p.statusFluxo === 1).length > 0 ? (
+                ) : productosSelectionaveis.length > 0 ? (
                   <p className="text-white/60 text-sm" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 300 }}>
-                    {products.filter((p) => p.statusFluxo === 1).length} produto(s) disponível(eis) para envio
+                    {productosSelectionaveis.length} produto(s) disponível(eis) para envio
                   </p>
                 ) : null}
               </div>
@@ -381,6 +375,7 @@ export function FornecedorDashboard() {
             </div>
 
             {/* Products Table */}
+            <LoadingOverlay loading={isLoadingProducts} message="Carregando produtos...">
             <div className="overflow-x-auto rounded-xl border-2 border-white/20">
               <table className="w-full">
                 <thead>
@@ -433,11 +428,15 @@ export function FornecedorDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {products.length === 0 ? (
+                  {isLoadingProducts ? (
+                    <tr aria-hidden>
+                      <td colSpan={9} className="h-40" />
+                    </tr>
+                  ) : products.length === 0 ? (
                     <tr>
                       <td colSpan={9} className="px-6 py-12 text-center">
                         <p className="text-white/60 text-lg" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 300 }}>
-                          {isLoadingProducts ? 'Carregando...' : 'Nenhum produto cadastrado ainda.'}
+                          Nenhum produto cadastrado ainda.
                         </p>
                         <p className="text-white/40 text-sm mt-2" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 300 }}>
                           Clique em "Novo Produto" para começar.
@@ -446,7 +445,7 @@ export function FornecedorDashboard() {
                     </tr>
                   ) : (
                     products.map((product, index) => {
-                      const isSelectable = product.statusFluxo === 1;
+                      const isSelectable = isEditavelFornecedor(product.statusFluxo);
                       return (
                         <tr
                           key={product.id}
@@ -483,17 +482,17 @@ export function FornecedorDashboard() {
                           </td>
                           <td className="px-4 py-5">
                             <span
-                              className={`inline-flex px-3 py-1 rounded-full text-xs font-medium border ${getStatusColor(product.statusFluxo)}`}
+                              className={`inline-flex px-3 py-1 rounded-full text-xs font-medium border ${getStatusProdutoColor(product.statusFluxo)}`}
                               style={{ fontFamily: 'Outfit, sans-serif' }}
                             >
-                              {STATUS_FLUXO[product.statusFluxo] || 'Desconhecido'}
+                              {labelStatusProduto(product.statusFluxo)}
                             </span>
                           </td>
                           <td className="px-4 py-5 text-white/70 text-sm" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 300 }}>
                             {formatDate(product.dataCadastro)}
                           </td>
                           <td className="px-4 py-5 text-center">
-                            {product.statusFluxo === 1 ? (
+                            {isEditavelFornecedor(product.statusFluxo) ? (
                               <button
                                 onClick={() =>
                                   navigate(`/fornecedor/produto/editar/${product.id}`, { state: { fornecedorData } })
@@ -501,7 +500,7 @@ export function FornecedorDashboard() {
                                 className="text-white bg-white/20 hover:bg-white/30 transition-all duration-200 px-4 py-2 rounded-lg border border-white/30 text-sm"
                                 style={{ fontFamily: 'Outfit, sans-serif' }}
                               >
-                                Editar
+                                {product.statusFluxo === 8 ? 'Corrigir e reenviar' : 'Editar'}
                               </button>
                             ) : (
                               <button
@@ -523,6 +522,7 @@ export function FornecedorDashboard() {
                 </tbody>
               </table>
             </div>
+            </LoadingOverlay>
           </div>
         </div>
       </div>

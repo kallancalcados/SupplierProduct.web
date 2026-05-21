@@ -44,7 +44,6 @@ export function ColaboradorAuth() {
 
       toast.success('Autenticação Windows validada!', {
         description: `Bem-vindo ao departamento ${department === 'fiscal' ? 'Fiscal' : 'Compras'}`,
-        duration: 1500,
       });
 
       setTimeout(() => {
@@ -67,7 +66,6 @@ export function ColaboradorAuth() {
     } catch (error) {
       toast.error('Falha ao autenticar com Windows', {
         description: error instanceof ApiError || error instanceof Error ? error.message : 'Tente novamente.',
-        duration: 3500,
       });
     } finally {
       setIsSubmitting(false);

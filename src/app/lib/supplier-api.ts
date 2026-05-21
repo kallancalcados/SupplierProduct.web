@@ -60,21 +60,29 @@ export interface ColaboradorLoginResponse {
   expiracao?: string | null;
 }
 
-export interface ProdutoPendenteCompras {
+/** Resposta de `POST /listar-todos-cadastros` (listagem interna). */
+export interface ProdutoCadastroListagem {
   id: number;
+  codigoProdutoErp: string | null;
   nomeFornecedor: string;
   cgcCpfFornecedor: string;
   descProduto: string;
   descProdutoNf: string | null;
   referFabricante: string | null;
   ncm: string | null;
+  cest: string | null;
+  tipoProduto: string | null;
+  grupoProduto: string | null;
+  fabricante: string | null;
   statusFluxo: number;
   dataCadastro: string;
+  dataAtualizacao: string | null;
 }
 
-export interface ProdutoPendenteFiscal extends ProdutoPendenteCompras {
-  cest: string | null;
-}
+/** @deprecated Preferir `ProdutoCadastroListagem`. Mantido para chamadas legadas. */
+export type ProdutoPendenteCompras = ProdutoCadastroListagem;
+
+export type ProdutoPendenteFiscal = ProdutoCadastroListagem;
 
 export interface FornecedorPendenteFiscal {
   id: number;
@@ -382,8 +390,41 @@ export interface ProdutoCadastroDetalhe {
   enviaVarejoInternet?: boolean | null;
   variaPrecoPorCor?: boolean | null;
   obsFiscal?: string | null;
+  obsCompras?: string | null;
+  codigoProdutoErp?: string | null;
+  grupoProduto?: string | null;
+  subgrupoProduto?: string | null;
+  codCategoria?: string | null;
+  codSubcategoria?: string | null;
+  unidade?: string | null;
+  tipoStatusProduto?: string | null;
+  sexoTipo?: string | null;
+  tipoItemSped?: string | null;
+  indicadorCfop?: string | null;
+  periodoPcp?: string | null;
+  redeLojas?: string | null;
+  codProdutoSegmento?: string | null;
+  codProdutoSolucao?: string | null;
+  continuidade?: string | null;
+  sujeitoSubstituicaoTributaria?: string | null;
+  cartela?: string | null;
+  consumo?: number | null;
+  restricaoLavagem?: string | null;
+  rotaOperacao?: string | null;
+  tipoEncomenda?: string | null;
+  empresa?: string | null;
+  comissao?: number | null;
+  produtoEmProcesso?: string | null;
+  contaContabil?: string | null;
+  contaContabilCompra?: string | null;
+  contaContabilVenda?: string | null;
+  contaContabilDevCompra?: string | null;
+  contaContabilDevVenda?: string | null;
+  usuarioComprasLogin?: string | null;
+  usuarioFiscalLogin?: string | null;
+  dataAtualizacao?: string | null;
 
-  /** Campos opcionais: podem vir em versões futuras da API ou apenas no snapshot local. */
+  /** Campos opcionais do pré-cadastro fornecedor (slides). */
   subColecao?: string | null;
   tamCentimetros?: string | null;
   tipoBico?: string | null;
@@ -468,6 +509,15 @@ function normalizeText(value: string) {
   return value.trim();
 }
 
+function resolveApiUrl(path: string): string {
+  const base = API_BASE_URL.endsWith('/') ? API_BASE_URL : `${API_BASE_URL}/`;
+  if (path.startsWith('../')) {
+    return new URL(path, base).href;
+  }
+  const relative = path.startsWith('/') ? path.slice(1) : path;
+  return new URL(relative, base).href;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   const hasBody = init?.body != null;
@@ -478,7 +528,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set('Content-Type', 'application/json');
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(resolveApiUrl(path), {
     ...init,
     headers,
   });
@@ -760,8 +810,35 @@ export async function getUsuarioAutenticado(token: string) {
   return requestJwt<UsuarioAutenticado>('/usuario/me', token);
 }
 
+function statusFluxoFromCadastroListagem(p: ProdutoCadastroListagem): number {
+  const r = p as unknown as Record<string, unknown>;
+  const raw = r.statusFluxo ?? r.StatusFluxo;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** `POST /listar-todos-cadastros` — resposta bruta da API. */
+async function fetchTodosCadastrosRaw(): Promise<ProdutoCadastroListagem[]> {
+  return requestWindows<ProdutoCadastroListagem[]>('../listar-todos-cadastros', {
+    method: 'POST',
+  });
+}
+
+/** Apenas cadastros com status 6 (Aprovado para Integração). */
+export async function listarTodosCadastros(): Promise<ProdutoCadastroListagem[]> {
+  const rows = await fetchTodosCadastrosRaw();
+  return (rows ?? []).filter((p) => statusFluxoFromCadastroListagem(p) === 6);
+}
+
+/** Lista completa retornada por `POST /listar-todos-cadastros` (todos os status). */
+export async function listarTodosCadastrosCompletos(): Promise<ProdutoCadastroListagem[]> {
+  return fetchTodosCadastrosRaw();
+}
+
+/** @deprecated Use `listarTodosCadastrosCompletos` ou `listarTodosCadastros`. */
 export async function listarPendentesCompras() {
-  return requestWindows<ProdutoPendenteCompras[]>('/produtos/pendentes-compras');
+  return listarTodosCadastrosCompletos();
 }
 
 /** Detalhe completo para colaboradores (Windows Auth). */
@@ -771,6 +848,13 @@ export async function obterProdutoCadastroInterno(id: number) {
 
 export async function listarPendentesFiscal() {
   return requestWindows<ProdutoPendenteFiscal[]>('/produtos/pendentes-fiscal');
+}
+
+/** Produtos do dashboard fiscal: status 4, 5, 6 e 7 via `POST /listar-todos-cadastros`. */
+export async function listarProdutosDashboardFiscal(): Promise<ProdutoCadastroListagem[]> {
+  const rows = await fetchTodosCadastrosRaw();
+  const allowed = new Set([4, 5, 6, 7]);
+  return (rows ?? []).filter((p) => allowed.has(statusFluxoFromCadastroListagem(p)));
 }
 
 export async function listarFornecedoresPendentesFiscal() {
@@ -895,6 +979,16 @@ export async function integrarProdutoErp(id: number) {
   });
 }
 
+export interface ValidacaoIntegracaoProduto {
+  valido: boolean;
+  erros: string[];
+  avisos: string[];
+}
+
+export async function validarIntegracaoProdutoErp(id: number) {
+  return requestWindows<ValidacaoIntegracaoProduto>(`/produtos/${id}/validar-integracao`);
+}
+
 export async function criarPreCadastroProduto(token: string, payload: ProdutoPreCadastroPayload) {
   return requestJwt<{ mensagem: string; id: number; statusFluxo: number }>('/produtos/pre-cadastro', token, {
     method: 'POST',
@@ -1006,4 +1100,159 @@ export async function enviarProdutoParaCompras(token: string, id: number) {
   return requestJwt<{ mensagem: string; id: number; statusFluxo: number }>(`/produtos/${id}/enviar-para-compras`, token, {
     method: 'POST',
   });
+}
+
+export interface ProdutoImportacaoErro {
+  linha: number;
+  campo: string;
+  mensagem: string;
+}
+
+export interface ProdutoImportacaoResultado {
+  sucesso: boolean;
+  mensagem: string;
+  totalLinhas: number;
+  totalProdutosValidos: number;
+  totalProdutosComErro: number;
+  produtosCriadosIds: number[];
+  produtosAtualizadosIds: number[];
+  erros: ProdutoImportacaoErro[];
+}
+
+function parseContentDispositionFilename(header: string | null): string | null {
+  if (!header) return null;
+  const star = header.match(/filename\*=UTF-8''([^;]+)/i);
+  if (star) {
+    try {
+      return decodeURIComponent(star[1]);
+    } catch {
+      return star[1];
+    }
+  }
+  const plain = header.match(/filename="?([^";]+)"?/i);
+  return plain ? plain[1].trim() : null;
+}
+
+async function parseApiErrorMessage(response: Response): Promise<string> {
+  let message = response.statusText || 'Não foi possível concluir a operação.';
+  try {
+    const payload = (await response.json()) as ApiErrorPayload | { errors?: Record<string, string[]> };
+    if (typeof payload === 'string') {
+      message = payload;
+    } else if (payload && typeof payload === 'object') {
+      const p = payload as ApiErrorPayload & { errors?: Record<string, string[]> };
+      if (p.mensagem || p.Mensagem) {
+        message = p.mensagem ?? p.Mensagem ?? message;
+      } else if (p.title) {
+        message = p.title;
+        if (p.errors) {
+          const parts = Object.entries(p.errors).flatMap(([k, v]) => v.map((m) => `${k}: ${m}`));
+          if (parts.length) message = `${message} — ${parts.join('; ')}`;
+        }
+      } else if (p.error) {
+        message = p.error;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return message;
+}
+
+async function requestBlob(path: string, init?: RequestInit, fallbackFilename = 'modelo.xlsx'): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(`${API_BASE_URL}${path}`, init);
+  if (!response.ok) {
+    const message = await parseApiErrorMessage(response);
+    throw new ApiError(message, response.status);
+  }
+  const blob = await response.blob();
+  const filename =
+    parseContentDispositionFilename(response.headers.get('content-disposition')) ?? fallbackFilename;
+  return { blob, filename };
+}
+
+export function baixarArquivoNoNavegador(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.rel = 'noopener';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function normalizeImportacaoResultado(raw: unknown): ProdutoImportacaoResultado {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const errosRaw = (r.erros ?? r.Erros ?? []) as Array<Record<string, unknown>>;
+  const ids = (v: unknown) =>
+    Array.isArray(v) ? v.map((x) => Number(x)).filter((n) => Number.isFinite(n)) : [];
+
+  return {
+    sucesso: Boolean(r.sucesso ?? r.Sucesso),
+    mensagem: String(r.mensagem ?? r.Mensagem ?? ''),
+    totalLinhas: Number(r.totalLinhas ?? r.TotalLinhas ?? 0),
+    totalProdutosValidos: Number(r.totalProdutosValidos ?? r.TotalProdutosValidos ?? 0),
+    totalProdutosComErro: Number(r.totalProdutosComErro ?? r.TotalProdutosComErro ?? 0),
+    produtosCriadosIds: ids(r.produtosCriadosIds ?? r.ProdutosCriadosIds),
+    produtosAtualizadosIds: ids(r.produtosAtualizadosIds ?? r.ProdutosAtualizadosIds),
+    erros: errosRaw.map((e) => ({
+      linha: Number(e.linha ?? e.Linha ?? 0),
+      campo: String(e.campo ?? e.Campo ?? ''),
+      mensagem: String(e.mensagem ?? e.Mensagem ?? ''),
+    })),
+  };
+}
+
+function formDataComArquivo(arquivo: File): FormData {
+  const form = new FormData();
+  form.append('Arquivo', arquivo);
+  return form;
+}
+
+export async function baixarModeloImportacaoFornecedor(token: string) {
+  return requestBlob('/produtos/importacao/modelo-fornecedor', {
+    headers: { Authorization: `Bearer ${token}` },
+  }, 'modelo-importacao-fornecedor.xlsx');
+}
+
+export async function baixarModeloImportacaoCompras() {
+  return requestBlob(
+    '/produtos/importacao/modelo-compras',
+    { credentials: 'include' },
+    'modelo-preenchimento-compras.xlsx',
+  );
+}
+
+export async function baixarModeloImportacaoFiscal() {
+  return requestBlob(
+    '/produtos/importacao/modelo-fiscal',
+    { credentials: 'include' },
+    'modelo-preenchimento-fiscal.xlsx',
+  );
+}
+
+export async function importarProdutosFornecedor(token: string, arquivo: File) {
+  const raw = await requestJwt<unknown>('/produtos/importacao', token, {
+    method: 'POST',
+    body: formDataComArquivo(arquivo),
+  });
+  return normalizeImportacaoResultado(raw);
+}
+
+export async function importarProdutosCompras(arquivo: File) {
+  const raw = await requestWindows<unknown>('/produtos/importacao/compras', {
+    method: 'POST',
+    body: formDataComArquivo(arquivo),
+  });
+  return normalizeImportacaoResultado(raw);
+}
+
+export async function importarProdutosFiscal(arquivo: File) {
+  const raw = await requestWindows<unknown>('/produtos/importacao/fiscal', {
+    method: 'POST',
+    body: formDataComArquivo(arquivo),
+  });
+  return normalizeImportacaoResultado(raw);
 }

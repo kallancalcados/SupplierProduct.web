@@ -89,7 +89,6 @@ export function FornecedorAcessoCadastro() {
 
       toast.success('Acesso criado com sucesso!', {
         description: 'Agora faça login para acessar o portal.',
-        duration: 1500,
       });
 
       setTimeout(() => {

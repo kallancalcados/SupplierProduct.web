@@ -41,7 +41,6 @@ export function ProdutoEditar() {
         if (data.statusFluxo !== 1) {
           toast.error('Produto não pode ser editado', {
             description: 'Apenas produtos em Pré-Cadastro podem ser editados pelo fornecedor.',
-            duration: 2500,
           });
           navigate('/fornecedor/dashboard', { state: { fornecedorData } });
           return;
@@ -51,7 +50,6 @@ export function ProdutoEditar() {
       } catch (error) {
         toast.error('Não foi possível carregar o produto.', {
           description: error instanceof ApiError || error instanceof Error ? error.message : 'Tente novamente mais tarde.',
-          duration: 2500,
         });
         navigate('/fornecedor/dashboard', { state: { fornecedorData } });
       } finally {
